@@ -58,6 +58,13 @@
     display: flex; align-items: center; gap: 8px;
   }
   #compass .needle { font-size: 22px; }
+  #flip {
+    top: calc(env(safe-area-inset-top, 0px) + 74px); right: 14px;
+    width: 46px; height: 46px; padding: 0; flex: none;
+    background: #000a; border: 1px solid #ffffff30; border-radius: 999px;
+    font-size: 20px; color: #fff;
+  }
+  #flip:active { background: #ffffff30; }
   #controls {
     bottom: 0; left: 0; right: 0;
     padding: 18px 18px calc(env(safe-area-inset-bottom, 0px) + 22px);
@@ -118,6 +125,8 @@
     <span class="needle">🧭</span><span id="headingText">--°</span>
   </div>
 
+  <button id="flip" class="overlay" title="החלף מצלמה">🔄</button>
+
   <div id="log" class="overlay"></div>
 
   <div id="controls" class="overlay">
@@ -153,6 +162,7 @@
     capture:    document.getElementById("capture"),
     done:       document.getElementById("done"),
     distToggle: document.getElementById("distToggle"),
+    flip:       document.getElementById("flip"),
     log:        document.getElementById("log"),
     toast:      document.getElementById("toast"),
   };
@@ -184,27 +194,60 @@
   // ─────────────────────────────────────────────────────────────────────
   // מצלמה (getUserMedia) — מצלמה אחורית
   // ─────────────────────────────────────────────────────────────────────
+  var currentFacing = "environment";   // ברירת מחדל: מצלמה אחורית
+  function stopStream() {
+    try {
+      var s = els.cam.srcObject;
+      if (s) s.getTracks().forEach(function (t) { t.stop(); });
+    } catch (e) {}
+    els.cam.srcObject = null;
+  }
+  function attachStream(stream) {
+    els.cam.srcObject = stream;
+    state.camReady = true;
+    refreshStatus();
+  }
+  function gum(c) { return navigator.mediaDevices.getUserMedia(c); }
+  function camErr(e) { failCamera((e && e.name) || "שגיאת מצלמה"); }
+
   function startCamera() {
     if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
       failCamera("הדפדפן לא תומך במצלמה (getUserMedia)");
       return;
     }
-    var constraints = {
-      audio: false,
-      video: { facingMode: { ideal: "environment" }, width: { ideal: 1280 }, height: { ideal: 720 } }
-    };
-    navigator.mediaDevices.getUserMedia(constraints)
-      .then(function (stream) {
-        els.cam.srcObject = stream;
-        state.camReady = true;
-        refreshStatus();
+    stopStream();
+    if (currentFacing === "user") {
+      gum({ audio: false, video: { facingMode: { exact: "user" } } })
+        .then(attachStream)
+        .catch(function () { gum({ audio: false, video: true }).then(attachStream).catch(camErr); });
+      return;
+    }
+    // אחורית: 1) exact environment  2) בחירה לפי deviceId  3) נפילה חיננית
+    gum({ audio: false, video: { facingMode: { exact: "environment" }, width: { ideal: 1280 }, height: { ideal: 720 } } })
+      .then(attachStream)
+      .catch(function () { pickBackByDeviceId(); });
+  }
+  function pickBackByDeviceId() {
+    // labels נחשפים רק אחרי הרשאה: פותחים זרם זמני, ממיינים, ובוחרים את האחורית
+    gum({ audio: false, video: true })
+      .then(function (tmp) {
+        return navigator.mediaDevices.enumerateDevices().then(function (devs) {
+          var cams = devs.filter(function (d) { return d.kind === "videoinput"; });
+          var back = cams.filter(function (d) { return /back|rear|environment|world|背/i.test(d.label || ""); })[0];
+          if (!back && cams.length > 1) back = cams[cams.length - 1]; // לרוב האחרונה היא האחורית
+          tmp.getTracks().forEach(function (t) { t.stop(); });
+          var c = back ? { audio: false, video: { deviceId: { exact: back.deviceId } } }
+                       : { audio: false, video: { facingMode: "environment" } };
+          return gum(c);
+        });
       })
-      .catch(function (e) {
-        // ניסיון נוסף בלי הכפיית מצלמה אחורית
-        navigator.mediaDevices.getUserMedia({ audio: false, video: true })
-          .then(function (stream) { els.cam.srcObject = stream; state.camReady = true; refreshStatus(); })
-          .catch(function (e2) { failCamera((e2 && e2.name) || "שגיאת מצלמה"); });
-      });
+      .then(attachStream)
+      .catch(function () { gum({ audio: false, video: true }).then(attachStream).catch(camErr); });
+  }
+  function flipCamera() {
+    currentFacing = (currentFacing === "environment") ? "user" : "environment";
+    toast(currentFacing === "environment" ? "מצלמה אחורית" : "מצלמה קדמית");
+    startCamera();
   }
   function failCamera(reason) {
     els.statusHead.textContent = "לא ניתן לפתוח מצלמה";
@@ -382,6 +425,7 @@
   // ─────────────────────────────────────────────────────────────────────
   els.capture.addEventListener("click", onCapture);
   els.done.addEventListener("click", onDone);
+  els.flip.addEventListener("click", flipCamera);
   els.distToggle.addEventListener("change", function () {
     if (els.distToggle.checked) startMotion();
   });
