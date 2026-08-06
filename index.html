@@ -3,358 +3,128 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
-<title>סקר טופולוגיית BLE — FocusHLS</title>
+<title>בדיקת WebXR AR — FocusHLS</title>
 <!--
-  ════════════════════════════════════════════════════════════════════════
-  FocusHLS — סקר טופולוגיית תת-מיקומים + טביעת-אצבע BLE.  build = "ble-topo-v1"
-  ════════════════════════════════════════════════════════════════════════
-  מטרה: להסתובב במבנה, ללכוד "תת-מיקומים" כנקודות ייחוס, ולקבל מפה דו-ממדית
-    שאותה אפשר למקם ב-VR כעוגנים למשתמשים. לכל נקודה נשמר:
-      - מיקום משוער (x,y במטרים) לפי dead-reckoning (כיוון מצפן + ספירת צעדים)
-      - כיוון (heading)
-      - טביעת-אצבע BLE: {משדר → RSSI} — לזיהוי/מיקום מאוחר של משתמשים
-    בסוף מייצאים JSON לייבוא למערכת ה-VR שלך.
-
-  BLE בדפדפן — קרא לפני שימוש:
-    * סריקת BLE כאן משתמשת ב-Web Bluetooth (navigator.bluetooth.requestLEScan).
-    * זה עובד רק בכרום לאנדרואיד, ורק אחרי הפעלת דגל ניסיוני:
-        chrome://flags/#enable-experimental-web-platform-features  → Enabled → הפעל מחדש.
-      וכן: Bluetooth + מיקום (Location) של המכשיר חייבים להיות דלוקים.
-    * זה לא עובד בתוך ה-WebView של האפליקציה — זהו כלי סקר עצמאי בכרום.
-    * דורש HTTPS (GitHub Pages מספק).
-    אם BLE לא זמין — המפה והמיקום עדיין עובדים; טביעת-האצבע פשוט תישמר ריקה.
-
-  אין כאן שום תלות ב-ARCore, ב-LIVE או בקוד הנייטיבי.
+  בדיקת היתכנות WebXR AR (אותו מנוע שמאחורי NetLens — רץ על ARCore באנדרואיד).
+  מטרה: לקבוע חד-משמעית אם AR עם עיגון-עולם עובד על המכשיר הזה.
+  דורש: Chrome לאנדרואיד (Brave לרוב גם), HTTPS, ו-"Google Play Services for AR" מותקן.
+  אם ARCore שבור על המכשיר (באג 1.54) — הפתיחה תיכשל והשגיאה תוצג כאן.
 -->
 <style>
-  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
-  html, body { margin:0; height:100%; background:#0d1117; color:#e6edf3;
+  html,body{ margin:0; height:100%; background:#0d1117; color:#e6edf3;
     font-family:-apple-system,"Segoe UI",Roboto,"Noto Sans Hebrew",Arial,sans-serif; overflow:hidden; }
-  #app { display:flex; flex-direction:column; height:100%; }
-  header { padding:calc(env(safe-area-inset-top,0px) + 10px) 14px 8px; background:#161b22; border-bottom:1px solid #30363d; }
-  header .title { font-weight:700; font-size:16px; }
-  #status { font-size:12.5px; opacity:.9; margin-top:3px; line-height:1.5; }
-  .pill { display:inline-block; padding:1px 8px; border-radius:999px; font-size:11px; margin-inline-start:6px; }
-  .pill.on  { background:#1f6f3f; color:#d7ffe6; }
-  .pill.off { background:#5a1e1e; color:#ffd7d7; }
-  #mapWrap { position:relative; flex:1; min-height:0; }
-  #map { width:100%; height:100%; display:block; background:#0d1117; touch-action:none; }
-  #hint { position:absolute; inset:auto 10px 10px; background:#3d2b12; border:1px solid #7a5b1e;
-    color:#ffe6b3; font-size:12.5px; line-height:1.5; padding:9px 11px; border-radius:9px; display:none; }
-  #hint.show { display:block; }
-  #beacons { position:absolute; top:8px; inset-inline-end:8px; width:190px; max-height:42%; overflow-y:auto;
-    background:#0b0f14cc; border:1px solid #30363d; border-radius:9px; padding:6px 8px; font-size:11.5px; direction:ltr; text-align:left; }
-  #beacons h4 { margin:0 0 4px; font-size:11px; color:#8b949e; text-align:right; direction:rtl; }
-  .brow { display:flex; justify-content:space-between; gap:6px; padding:1px 0; }
-  .brow .nm { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-  .brow .rs { color:#7ee787; font-variant-numeric:tabular-nums; }
-  .brow { cursor:pointer; border-radius:5px; padding:2px 4px; }
-  .brow.sel { background:#1f6feb33; outline:1px solid #1f6feb; }
-  #selBar { position:absolute; top:8px; inset-inline-start:8px; display:none; align-items:center; gap:8px;
-    background:#0b0f14e6; border:1px solid #30363d; border-radius:9px; padding:8px 11px; max-width:58%; z-index:3; }
-  #selBar #selSwatch { width:14px; height:14px; border-radius:4px; background:#8b949e; flex:none; }
-  #selBar #selName { font-weight:700; font-size:13px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-  #selBar #selRssi { color:#7ee787; font-size:15px; font-variant-numeric:tabular-nums; }
-  footer { background:#161b22; border-top:1px solid #30363d;
-    padding:8px 12px calc(env(safe-area-inset-bottom,0px) + 10px); display:flex; flex-direction:column; gap:8px; }
-  #name { width:100%; padding:11px 12px; border-radius:10px; border:1px solid #30363d; background:#0d1117; color:#e6edf3; font-size:15px; text-align:right; }
-  .row { display:flex; gap:8px; }
-  button { border:none; border-radius:10px; font-size:14px; font-weight:700; padding:12px 8px; color:#fff; flex:1; cursor:pointer; }
-  #capture { background:#1f6feb; } #capture:active{ background:#1858c4; }
-  #capture:disabled { background:#3a3f47; opacity:.7; }
-  .sec { background:#30363d; } .sec:active{ background:#3d444d; }
-  .mini { flex:0 0 auto; padding:12px 12px; }
-  .toolbar { display:flex; gap:8px; align-items:center; font-size:12px; color:#8b949e; }
-  .toolbar input[type=number]{ width:56px; background:#0d1117; color:#e6edf3; border:1px solid #30363d; border-radius:7px; padding:5px 6px; text-align:center; }
-  #toast { position:fixed; left:50%; bottom:38%; transform:translateX(-50%); background:#0b0f14e6; border:1px solid #30363d;
-    border-radius:11px; padding:11px 16px; font-size:14px; max-width:86vw; text-align:center; opacity:0; transition:opacity .2s; pointer-events:none; z-index:9; }
-  #toast.show { opacity:1; }
+  #ui{ position:fixed; z-index:10; inset:0; display:flex; flex-direction:column; }
+  #head{ padding:calc(env(safe-area-inset-top,0px) + 14px) 16px 10px; }
+  #head .t{ font-weight:800; font-size:18px; }
+  #log{ flex:1; margin:8px 12px; padding:10px 12px; overflow-y:auto; background:#000a; border:1px solid #30363d;
+    border-radius:10px; font-size:13px; line-height:1.6; direction:ltr; text-align:left; }
+  #log .ok{ color:#7ee787; } #log .err{ color:#ff7b72; } #log .info{ color:#79c0ff; }
+  #start{ margin:0 12px calc(env(safe-area-inset-bottom,0px) + 16px); padding:16px; border:none; border-radius:14px;
+    background:#1f6feb; color:#fff; font-size:18px; font-weight:800; }
+  #start:active{ background:#1858c4; } #start:disabled{ background:#3a3f47; opacity:.7; }
+  canvas{ position:fixed; inset:0; }
 </style>
 </head>
 <body>
-<div id="app">
-  <header>
-    <div class="title">🗺️ סקר טופולוגיית תת-מיקומים · BLE</div>
-    <div id="status">
-      חיישנים: <span id="pillSensors" class="pill off">כבויים</span>
-      BLE: <span id="pillBle" class="pill off">כבוי</span>
-      נקודות: <span id="ptCount">0</span>
-    </div>
-  </header>
-
-  <div id="mapWrap">
-    <canvas id="map"></canvas>
-    <div id="selBar"><span id="selSwatch"></span><span id="selName">—</span><span id="selRssi">—</span></div>
-    <div id="beacons"><h4>משדרים נקלטים · הקש לבחירה</h4><div id="beaconList"><div class="brow"><span class="nm">—</span></div></div></div>
-    <div id="hint"></div>
+<div id="ui">
+  <div id="head"><div class="t">🧪 בדיקת WebXR AR (מנוע NetLens)</div>
+    <div style="font-size:12.5px;opacity:.85;margin-top:4px">אחרי שהסשן נפתח: הזז את הטלפון לאט כדי לזהות את הרצפה, ואז הקש להצבת קובייה.</div>
   </div>
-
-  <footer>
-    <input id="name" type="text" placeholder="שם תת-מיקום (למשל: לובי A / קומה 2)">
-    <div class="toolbar">
-      <span>אורך צעד (מ'):</span>
-      <input id="stride" type="number" min="0.3" max="1.2" step="0.05" value="0.7">
-      <span style="flex:1"></span>
-      <span id="posTxt">x:0.0 y:0.0</span>
-    </div>
-    <div class="row">
-      <button id="capture" disabled>לכוד תת-מיקום</button>
-      <button id="undo" class="sec mini">בטל אחרון</button>
-    </div>
-    <div class="row">
-      <button id="sensors" class="sec">הפעל חיישנים</button>
-      <button id="bleBtn" class="sec">הפעל BLE</button>
-      <button id="reset" class="sec">אפס</button>
-      <button id="export" class="sec">ייצוא JSON</button>
-    </div>
-  </footer>
+  <div id="log"></div>
+  <button id="start">התחל בדיקת AR</button>
 </div>
-<div id="toast"></div>
 
-<script>
-"use strict";
-(function () {
-  var $ = function (id) { return document.getElementById(id); };
-  var els = {
-    map:$("map"), status:$("status"), pillSensors:$("pillSensors"), pillBle:$("pillBle"),
-    ptCount:$("ptCount"), beaconList:$("beaconList"), hint:$("hint"), name:$("name"),
-    stride:$("stride"), posTxt:$("posTxt"), capture:$("capture"), undo:$("undo"),
-    sensors:$("sensors"), bleBtn:$("bleBtn"), reset:$("reset"), export:$("export"), toast:$("toast"),
-    selBar:$("selBar"), selName:$("selName"), selRssi:$("selRssi"), selSwatch:$("selSwatch")
-  };
-  var ctx = els.map.getContext("2d");
+<script type="importmap">
+{ "imports": {
+  "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+}}
+</script>
+<script type="module">
+import * as THREE from 'three';
 
-  var S = {
-    heading:0, headingRaw:null, haveOrient:false,
-    pos:{x:0,y:0}, path:[{x:0,y:0}], points:[],
-    stride:0.7, lastPeak:0,
-    selectedId:null, selectedName:"", samples:[]
-  };
-  var BLE = { supported: !!(navigator.bluetooth && navigator.bluetooth.requestLEScan),
-              scanning:false, scan:null, beacons:{} };
+var logEl = document.getElementById('log');
+function log(msg, cls){ var d=document.createElement('div'); if(cls) d.className=cls; d.textContent=msg; logEl.appendChild(d); logEl.scrollTop=logEl.scrollHeight; }
+window.addEventListener('error', function(e){ log('JS error: '+(e.message||e), 'err'); });
+window.addEventListener('unhandledrejection', function(e){ log('Promise rejected: '+((e.reason&&e.reason.message)||e.reason), 'err'); });
 
-  // ── עזרים ─────────────────────────────────────────────────────────────
-  function toast(m, ms){ els.toast.textContent=m; els.toast.classList.add("show");
-    clearTimeout(toast._t); toast._t=setTimeout(function(){els.toast.classList.remove("show");}, ms||2200); }
-  function hint(m){ els.hint.textContent=m; els.hint.classList.toggle("show", !!m); }
+log('דף נטען. בודק סביבה…', 'info');
+log('secure context (HTTPS): '+ (window.isSecureContext ? 'כן' : 'לא!'), window.isSecureContext?'ok':'err');
+log('navigator.xr קיים: '+ (!!navigator.xr), navigator.xr?'ok':'err');
 
-  // ── חיישני כיוון + תנועה (dead-reckoning) ────────────────────────────
-  function computeHeading(ev){
-    var h=null;
-    if(typeof ev.webkitCompassHeading==="number") h=ev.webkitCompassHeading;
-    else if(ev.alpha!=null) h=360-ev.alpha;
-    if(h==null) return null;
-    var so=(screen.orientation&&typeof screen.orientation.angle==="number")?screen.orientation.angle:(window.orientation||0);
-    h=(h+so)%360; if(h<0) h+=360; return h;
-  }
-  function onOrient(ev){
-    var h=computeHeading(ev); if(h==null) return;
-    if(S.headingRaw==null) S.headingRaw=h;
-    var diff=((h-S.headingRaw+540)%360)-180; S.headingRaw=(S.headingRaw+diff*0.25+360)%360;
-    S.heading=S.headingRaw; S.haveOrient=true;
-  }
-  function onMotion(ev){
-    var a=ev.accelerationIncludingGravity||ev.acceleration; if(!a) return;
-    var mag=Math.sqrt((a.x||0)*(a.x||0)+(a.y||0)*(a.y||0)+(a.z||0)*(a.z||0));
-    var now=Date.now();
-    if(mag>12 && (now-S.lastPeak)>300){
-      S.lastPeak=now;
-      var rad=(S.heading||0)*Math.PI/180;
-      S.pos.x+=Math.sin(rad)*S.stride; S.pos.y+=Math.cos(rad)*S.stride;
-      S.path.push({x:S.pos.x,y:S.pos.y});
-      if(S.path.length>4000) S.path.shift();
-      sampleSelected();
+var camera, scene, renderer, controller, reticle, hitTestSource=null, hitReq=false, planeSeen=false, placed=0;
+
+function init(){
+  scene=new THREE.Scene();
+  camera=new THREE.PerspectiveCamera(70, innerWidth/innerHeight, 0.01, 20);
+  var light=new THREE.HemisphereLight(0xffffff,0xbbbbff,1); light.position.set(0.5,1,0.25); scene.add(light);
+  renderer=new THREE.WebGLRenderer({ antialias:true, alpha:true });
+  renderer.setPixelRatio(window.devicePixelRatio); renderer.setSize(innerWidth,innerHeight); renderer.xr.enabled=true;
+  document.body.appendChild(renderer.domElement);
+
+  var geo=new THREE.BoxGeometry(0.12,0.12,0.12);
+  function onSelect(){ if(reticle.visible){
+    var m=new THREE.Mesh(geo, new THREE.MeshPhongMaterial({ color:0x1f6feb|((Math.random()*0xffffff)&0x00ff00) }));
+    m.position.setFromMatrixPosition(reticle.matrix); m.position.y+=0.06; scene.add(m); placed++;
+    log('✓ הוצבה קובייה #'+placed+' — עיגון-עולם עובד!', 'ok');
+  } }
+  controller=renderer.xr.getController(0); controller.addEventListener('select', onSelect); scene.add(controller);
+
+  reticle=new THREE.Mesh(new THREE.RingGeometry(0.08,0.1,32).rotateX(-Math.PI/2), new THREE.MeshBasicMaterial({color:0x2ea043}));
+  reticle.matrixAutoUpdate=false; reticle.visible=false; scene.add(reticle);
+
+  renderer.setAnimationLoop(render);
+  window.addEventListener('resize', function(){ camera.aspect=innerWidth/innerHeight; camera.updateProjectionMatrix(); renderer.setSize(innerWidth,innerHeight); });
+}
+
+function render(t, frame){
+  if(frame){
+    var ref=renderer.xr.getReferenceSpace(), session=renderer.xr.getSession();
+    if(!hitReq){ hitReq=true;
+      session.requestReferenceSpace('viewer').then(function(vs){
+        session.requestHitTestSource({ space:vs }).then(function(s){ hitTestSource=s; log('hit-test source מוכן — מזיז לזיהוי מישור…', 'info'); })
+        .catch(function(e){ log('hit-test source נכשל: '+(e.message||e), 'err'); });
+      });
+      session.addEventListener('end', function(){ hitReq=false; hitTestSource=null; log('סשן AR הסתיים.', 'info'); });
+    }
+    if(hitTestSource){
+      var hits=frame.getHitTestResults(hitTestSource);
+      if(hits.length){ var pose=hits[0].getPose(ref); reticle.visible=true; reticle.matrix.fromArray(pose.transform.matrix);
+        if(!planeSeen){ planeSeen=true; log('✓ זוהה מישור (רצפה) — הקש כדי להניח קובייה.', 'ok'); }
+      } else reticle.visible=false;
     }
   }
-  function enableSensors(){
-    var DOE=window.DeviceOrientationEvent, DME=window.DeviceMotionEvent;
-    function bindO(){ if("ondeviceorientationabsolute" in window) window.addEventListener("deviceorientationabsolute",onOrient,true);
-      window.addEventListener("deviceorientation",onOrient,true); }
-    function bindM(){ window.addEventListener("devicemotion",onMotion,true); }
-    var need=[];
-    if(DOE&&typeof DOE.requestPermission==="function") need.push(DOE.requestPermission().then(function(r){ if(r==="granted") bindO(); }));
-    else bindO();
-    if(DME&&typeof DME.requestPermission==="function") need.push(DME.requestPermission().then(function(r){ if(r==="granted") bindM(); }));
-    else bindM();
-    Promise.all(need).catch(function(){});
-    els.pillSensors.className="pill on"; els.pillSensors.textContent="פעילים";
-    els.capture.disabled=false;
-    toast("חיישנים פעילים — התחל ללכת, המיקום יתעדכן");
-  }
+  renderer.render(scene,camera);
+}
 
-  // ── BLE (Web Bluetooth advertisement scanning) ───────────────────────
-  function bleErr(e){
-    var n=(e&&e.name)||"";
-    if(n==="NotFoundError") return "סריקת BLE בוטלה או שאין הרשאה. ודא Bluetooth+מיקום דלוקים ואשר את הבקשה.";
-    if(n==="NotSupportedError"||n==="TypeError") return "requestLEScan לא זמין — הפעל chrome://flags/#enable-experimental-web-platform-features, ורענן.";
-    if(n==="SecurityError") return "נדרש HTTPS ולחיצת משתמש. ודא שהעמוד ב-https ולחץ שוב על 'הפעל BLE'.";
-    if(n==="InvalidStateError") return "המתאם Bluetooth כבוי — הדלק Bluetooth ונסה שוב.";
-    return "שגיאת BLE: "+n;
-  }
-  function onAdv(ev){
-    if(!BLE.scanning) return;
-    var id=ev.device.id||ev.device.name||"?";
-    BLE.beacons[id]={ id:id, name:ev.device.name||"", rssi:ev.rssi, tx:ev.txPower, ts:Date.now() };
-  }
-  function startBle(){
-    if(!BLE.supported){ hint("הדפדפן לא תומך ב-requestLEScan. הפעל chrome://flags/#enable-experimental-web-platform-features → Enabled → הפעל מחדש את כרום."); return; }
-    if(BLE.scanning){ stopBle(); return; }
-    navigator.bluetooth.requestLEScan({ acceptAllAdvertisements:true, keepRepeatedDevices:true })
-      .then(function(scan){
-        BLE.scan=scan; BLE.scanning=true;
-        navigator.bluetooth.addEventListener("advertisementreceived", onAdv);
-        els.pillBle.className="pill on"; els.pillBle.textContent="סורק";
-        els.bleBtn.textContent="עצור BLE"; hint("");
-        toast("סריקת BLE החלה");
-      })
-      .catch(function(e){ hint(bleErr(e)); });
-  }
-  function stopBle(){
-    try{ if(BLE.scan) BLE.scan.stop(); }catch(e){}
-    BLE.scanning=false; els.pillBle.className="pill off"; els.pillBle.textContent="כבוי"; els.bleBtn.textContent="הפעל BLE";
-  }
-  function currentFingerprint(){
-    var now=Date.now(), out=[];
-    for(var k in BLE.beacons){ var b=BLE.beacons[k]; if(now-b.ts<=4000) out.push({ id:b.id, name:b.name, rssi:b.rssi }); }
-    out.sort(function(a,b){ return b.rssi-a.rssi; });
-    return out;
-  }
-  function beaconLabel(b){ return (b.name||b.id||"?"); }
-  function rssiColor(r){ if(r==null) return "#8b949e"; var t=Math.max(0,Math.min(1,(r+100)/60)); return "hsl("+(t*120)+",70%,50%)"; }
-  function updateSelReadout(b){
-    if(!S.selectedId){ els.selBar.style.display="none"; return; }
-    els.selBar.style.display="flex";
-    els.selName.textContent=(b&&b.name)||S.selectedName||S.selectedId;
-    els.selRssi.textContent=(b&&b.rssi!=null)?(b.rssi+" dBm"):"—";
-    els.selSwatch.style.background=rssiColor(b?b.rssi:null);
-  }
-  function sampleSelected(){
-    if(!S.selectedId) return; var b=BLE.beacons[S.selectedId];
-    if(!b || Date.now()-b.ts>4000) return;
-    S.samples.push({ x:S.pos.x, y:S.pos.y, rssi:b.rssi, id:S.selectedId, ts:Date.now() });
-    if(S.samples.length>6000) S.samples.shift();
-  }
-  function renderBeacons(){
-    var now=Date.now();
-    if(renderBeacons._last && now-renderBeacons._last<350) return; renderBeacons._last=now;
-    var fp=currentFingerprint();
-    if(S.selectedId && !fp.some(function(b){return b.id===S.selectedId;})){
-      var sb=BLE.beacons[S.selectedId]; if(sb) fp.unshift({id:sb.id,name:sb.name,rssi:(now-sb.ts<=6000?sb.rssi:null)});
-    }
-    if(!fp.length){ els.beaconList.innerHTML='<div class="brow"><span class="nm">'+(BLE.scanning?"מחפש…":"—")+'</span></div>'; updateSelReadout(null); return; }
-    var html="", shown=0, selB=null;
-    for(var i=0;i<fp.length && shown<14;i++){ var b=fp[i]; var sel=(b.id===S.selectedId); if(sel) selB=b;
-      html+='<div class="brow'+(sel?' sel':'')+'" data-id="'+b.id+'"><span class="nm">'+(sel?'◉ ':'')+beaconLabel(b).slice(0,16)+'</span><span class="rs">'+(b.rssi==null?'—':b.rssi)+'</span></div>';
-      shown++; }
-    els.beaconList.innerHTML=html;
-    updateSelReadout(selB);
-  }
-
-  // ── לכידה / ניהול נקודות ─────────────────────────────────────────────
-  function capture(){
-    var nm=(els.name.value||"").trim();
-    if(!nm){ toast("הזן שם תת-מיקום"); els.name.focus(); return; }
-    var selRec=null;
-    if(S.selectedId){ var sb=BLE.beacons[S.selectedId]; selRec={ id:S.selectedId, name:S.selectedName, rssi:(sb&&Date.now()-sb.ts<=4000)?sb.rssi:null }; }
-    var rec={ name:nm, x:Math.round(S.pos.x*100)/100, y:Math.round(S.pos.y*100)/100,
-              heading:S.haveOrient?Math.round(S.heading*10)/10:null, ts:Date.now(),
-              selected:selRec, ble:currentFingerprint() };
-    S.points.push(rec); els.ptCount.textContent=S.points.length; els.name.value="";
-    toast('נלכד "'+nm+'"'+(selRec?('  ·  '+selRec.name+': '+(selRec.rssi==null?'—':selRec.rssi)):('  ·  BLE: '+rec.ble.length)));
-  }
-  function undo(){ if(!S.points.length){ toast("אין נקודות"); return; } var p=S.points.pop(); els.ptCount.textContent=S.points.length; toast("בוטל: "+p.name); }
-  function resetAll(){ S.pos={x:0,y:0}; S.path=[{x:0,y:0}]; S.points=[]; S.samples=[]; S.headingRaw=null; els.ptCount.textContent=0; toast("אופס — נקודת (0,0) חדשה"); }
-  function exportJson(){
-    var data={ createdAt:new Date().toISOString(), unit:"meters", origin:"first-start",
-               selectedBeacon:S.selectedId?{id:S.selectedId,name:S.selectedName}:null,
-               points:S.points, samples:S.samples };
-    var txt=JSON.stringify(data,null,2);
-    try{
-      var blob=new Blob([txt],{type:"application/json"});
-      var a=document.createElement("a"); a.href=URL.createObjectURL(blob);
-      a.download="ble-topology-"+Date.now()+".json"; document.body.appendChild(a); a.click();
-      setTimeout(function(){ URL.revokeObjectURL(a.href); a.remove(); },1000);
-      toast("יוצא JSON ("+S.points.length+" נקודות)");
-    }catch(e){
-      if(navigator.clipboard){ navigator.clipboard.writeText(txt); toast("הועתק ל-clipboard"); }
-      else toast("שגיאת ייצוא");
-    }
-  }
-
-  // ── ציור המפה (top-down) ─────────────────────────────────────────────
-  function resize(){ var r=els.map.getBoundingClientRect(), dpr=window.devicePixelRatio||1;
-    els.map.width=r.width*dpr; els.map.height=r.height*dpr; ctx.setTransform(dpr,0,0,dpr,0,0); }
-  function bounds(){
-    var xs=[S.pos.x],ys=[S.pos.y];
-    S.path.forEach(function(p){xs.push(p.x);ys.push(p.y);});
-    S.points.forEach(function(p){xs.push(p.x);ys.push(p.y);});
-    var minX=Math.min.apply(null,xs),maxX=Math.max.apply(null,xs),minY=Math.min.apply(null,ys),maxY=Math.max.apply(null,ys);
-    if(maxX-minX<4){var c=(minX+maxX)/2;minX=c-2;maxX=c+2;} if(maxY-minY<4){var c2=(minY+maxY)/2;minY=c2-2;maxY=c2+2;}
-    return {minX:minX,maxX:maxX,minY:minY,maxY:maxY};
-  }
-  function draw(){
-    var w=els.map.clientWidth,h=els.map.clientHeight; ctx.clearRect(0,0,w,h);
-    var b=bounds(), pad=40;
-    var sx=(w-pad*2)/(b.maxX-b.minX), sy=(h-pad*2)/(b.maxY-b.minY);
-    var scale=Math.max(8,Math.min(100,Math.min(sx,sy)));
-    var cx=(b.minX+b.maxX)/2, cy=(b.minY+b.maxY)/2;
-    function X(wx){ return w/2+(wx-cx)*scale; }
-    function Y(wy){ return h/2-(wy-cy)*scale; }
-    // רשת 1 מ'
-    ctx.lineWidth=1; ctx.strokeStyle="#161b22"; ctx.beginPath();
-    for(var gx=Math.ceil(b.minX);gx<=Math.floor(b.maxX);gx++){ ctx.moveTo(X(gx),0); ctx.lineTo(X(gx),h); }
-    for(var gy=Math.ceil(b.minY);gy<=Math.floor(b.maxY);gy++){ ctx.moveTo(0,Y(gy)); ctx.lineTo(w,Y(gy)); }
-    ctx.stroke();
-    // heatmap של המשדר הנבחר — צבע לפי RSSI (ירוק=חזק, אדום=חלש)
-    if(S.selectedId){
-      for(var si=0;si<S.samples.length;si++){ var s=S.samples[si]; if(s.id!==S.selectedId) continue;
-        ctx.fillStyle=rssiColor(s.rssi); ctx.globalAlpha=0.5; ctx.beginPath(); ctx.arc(X(s.x),Y(s.y),7,0,7); ctx.fill(); }
-      ctx.globalAlpha=1;
-    }
-    // מסלול
-    if(S.path.length>1){ ctx.strokeStyle="#30475e"; ctx.lineWidth=2; ctx.beginPath();
-      ctx.moveTo(X(S.path[0].x),Y(S.path[0].y));
-      for(var i=1;i<S.path.length;i++) ctx.lineTo(X(S.path[i].x),Y(S.path[i].y)); ctx.stroke(); }
-    // נקודות תת-מיקום
-    S.points.forEach(function(p,idx){
-      var px=X(p.x),py=Y(p.y);
-      ctx.fillStyle="#1f6feb"; ctx.beginPath(); ctx.arc(px,py,7,0,7); ctx.fill();
-      ctx.strokeStyle="#0d1117"; ctx.lineWidth=2; ctx.stroke();
-      ctx.fillStyle="#e6edf3"; ctx.font="12px sans-serif"; ctx.textAlign="right"; ctx.textBaseline="middle";
-      ctx.fillText(p.name,px-11,py);
+async function startAR(){
+  var btn=document.getElementById('start');
+  if(!navigator.xr){ log('WebXR לא נתמך בדפדפן (navigator.xr חסר). נסה Chrome עדכני.', 'err'); return; }
+  btn.disabled=true; btn.textContent='פותח AR…';
+  var supported=false;
+  try{ supported=await navigator.xr.isSessionSupported('immersive-ar'); }catch(e){ log('isSessionSupported נכשל: '+(e.message||e), 'err'); }
+  log('immersive-ar נתמך: '+supported, supported?'ok':'err');
+  if(!supported){ log('AR לא זמין. סיבות אפשריות: Google Play Services for AR לא מותקן, או שהמכשיר לא נתמך ע"י ARCore.', 'err'); btn.disabled=false; btn.textContent='נסה שוב'; return; }
+  try{
+    var session=await navigator.xr.requestSession('immersive-ar', {
+      requiredFeatures:['hit-test'], optionalFeatures:['dom-overlay','local-floor'], domOverlay:{ root:document.getElementById('ui') }
     });
-    // מיקום נוכחי + חץ כיוון
-    var mx=X(S.pos.x),my=Y(S.pos.y);
-    ctx.fillStyle="#2ea043"; ctx.beginPath(); ctx.arc(mx,my,6,0,7); ctx.fill();
-    if(S.haveOrient){ var rad=S.heading*Math.PI/180, dx=Math.sin(rad), dy=-Math.cos(rad);
-      ctx.strokeStyle="#2ea043"; ctx.lineWidth=3; ctx.beginPath(); ctx.moveTo(mx,my); ctx.lineTo(mx+dx*22,my+dy*22); ctx.stroke(); }
-    els.posTxt.textContent="x:"+S.pos.x.toFixed(1)+" y:"+S.pos.y.toFixed(1);
-    renderBeacons();
-    requestAnimationFrame(draw);
+    log('✓ סשן AR נפתח! ממתין לזיהוי מישור…', 'ok');
+    renderer.xr.setReferenceSpaceType('local');
+    await renderer.xr.setSession(session);
+    btn.style.display='none';
+  }catch(e){
+    log('✗ פתיחת AR נכשלה: '+(e.name||'')+' — '+(e.message||e), 'err');
+    log('אם זו FatalException/סנסור — זה אותו באג ARCore 1.54 שראינו קודם.', 'err');
+    btn.disabled=false; btn.textContent='נסה שוב';
   }
+}
 
-  // ── חיווט ─────────────────────────────────────────────────────────────
-  els.sensors.addEventListener("click", enableSensors);
-  els.bleBtn.addEventListener("click", startBle);
-  els.capture.addEventListener("click", capture);
-  els.undo.addEventListener("click", undo);
-  els.reset.addEventListener("click", resetAll);
-  els.export.addEventListener("click", exportJson);
-  els.stride.addEventListener("change", function(){ var v=parseFloat(els.stride.value); if(v>0) S.stride=v; });
-  els.beaconList.addEventListener("click", function(e){
-    var row=e.target.closest ? e.target.closest(".brow") : null; if(!row) return;
-    var id=row.getAttribute("data-id"); if(!id) return;
-    if(S.selectedId===id){ S.selectedId=null; S.selectedName=""; toast("בוטלה הבחירה"); }
-    else { S.selectedId=id; var b=BLE.beacons[id]; S.selectedName=(b&&b.name)||id; toast('נבחר "'+S.selectedName+'" — המפה מתייחסת אליו בלבד'); }
-    renderBeacons._last=0; renderBeacons();
-  });
-  setInterval(sampleSelected, 700);
-  window.addEventListener("resize", resize);
+document.getElementById('start').addEventListener('click', startAR);
 
-  if(!BLE.supported) hint("שים לב: requestLEScan לא זמין בדפדפן הזה. הפעל chrome://flags/#enable-experimental-web-platform-features → Enabled → הפעל מחדש. (המפה והמיקום עובדים גם בלי זה — טביעת-האצבע פשוט תישמר ריקה.)");
-
-  resize(); requestAnimationFrame(draw);
-})();
+// אתחול מוקדם + בדיקת תמיכה ראשונית
+try{ init(); log('three.js אותחל בהצלחה.', 'ok'); }catch(e){ log('כשל באתחול three.js: '+(e.message||e), 'err'); }
+if(navigator.xr){ navigator.xr.isSessionSupported('immersive-ar').then(function(s){ log('בדיקה ראשונית — immersive-ar נתמך: '+s, s?'ok':'err'); }).catch(function(){}); }
 </script>
 </body>
 </html>
